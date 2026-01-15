@@ -1,17 +1,16 @@
 "use client";
 
-import "@fontsource/sarabun/thai.css";
-import "@fontsource/sarabun/400.css"; // normal weight
-import "@fontsource/sarabun/700.css"; // bold weight
+// import "@fontsource/sarabun/thai.css";
+// import "@fontsource/sarabun/400.css"; // normal weight
+// import "@fontsource/sarabun/700.css"; // bold weight
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { format } from "date-fns";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+import { debounce } from "lodash";
 import { Download, Edit, Plus, Search, Trash2, X } from "lucide-react";
 import Image from "next/image";
 import pdfMake from "pdfmake/build/pdfmake";
-import { useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
@@ -129,6 +128,72 @@ pdfMake.fonts = {
     },
 };
 
+// Create a separate component for lazy loaded images
+const LazyLoadedImage = memo(
+    ({
+        src,
+        alt,
+        className,
+    }: {
+        src: string;
+        alt: string;
+        className?: string;
+    }) => {
+        return (
+            <div className="relative h-24 w-24">
+                <Image
+                    src={src}
+                    alt={alt}
+                    fill
+                    sizes="(max-width: 96px) 100vw, 96px"
+                    className={`${className} object-contain`}
+                    loading="lazy"
+                    unoptimized={
+                        src.startsWith("data:") || src.startsWith("http")
+                    }
+                />
+            </div>
+        );
+    },
+);
+LazyLoadedImage.displayName = "LazyLoadedImage";
+
+// Create a separate component for equipment images
+const EquipmentImages = memo(
+    ({
+        images,
+    }: {
+        images: Array<{ id: string; filepath: string; filename: string }>;
+    }) => {
+        return (
+            <div className="flex flex-wrap gap-2">
+                {images.map((image) => (
+                    <a
+                        key={image.id}
+                        href={`http://localhost:8000/${image.filepath.replace(/\\/g, "/")}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block"
+                    >
+                        <div className="relative h-24 w-24 overflow-hidden rounded border border-gray-200">
+                            <Image
+                                src={`http://localhost:8000/${image.filepath.replace(/\\/g, "/")}`}
+                                alt={image.filename}
+                                fill
+                                sizes="(max-width: 96px) 100vw, 96px"
+                                className="object-cover"
+                                loading="lazy"
+                                unoptimized
+                            />
+                        </div>
+                    </a>
+                ))}
+            </div>
+        );
+    },
+);
+EquipmentImages.displayName = "EquipmentImages";
+
 export default function EquipmentManagement() {
     const { equipments, mutate } = useEquipments();
     const { categories } = useCategories();
@@ -198,39 +263,42 @@ export default function EquipmentManagement() {
         addForm.reset();
     };
 
-    const handleShowDetails = (equipment: Equipment) => {
+    const handleShowDetails = useCallback((equipment: Equipment) => {
         setSelectedEquipment(equipment);
         setIsDetailsDialogOpen(true);
-    };
+    }, []);
 
-    const handleEditEquipment = (equipment: Equipment) => {
-        setEditingEquipment(equipment);
-        editForm.reset({
-            name: equipment.name,
-            description: equipment.description || undefined,
-            serialNumber: equipment.serialNumber || undefined,
-            acquisitionMethod: equipment.acquisitionMethod,
-            notes: equipment.notes || undefined,
-            roomId: equipment.roomId || undefined,
-            categoryId: equipment.categoryId || undefined,
-        });
-        setIsEditDialogOpen(true);
-    };
+    const handleEditEquipment = useCallback(
+        (equipment: Equipment) => {
+            setEditingEquipment(equipment);
+            editForm.reset({
+                name: equipment.name,
+                description: equipment.description || undefined,
+                serialNumber: equipment.serialNumber || undefined,
+                acquisitionMethod: equipment.acquisitionMethod,
+                notes: equipment.notes || undefined,
+                roomId: equipment.roomId || undefined,
+                categoryId: equipment.categoryId || undefined,
+            });
+            setIsEditDialogOpen(true);
+        },
+        [editForm],
+    );
 
-    const handleEditChange = (
-        field: keyof UpdateEquipmentForm,
-        value: string | number | null,
-    ) => {
-        if (!editingEquipment) return;
+    const handleEditChange = useCallback(
+        (field: keyof UpdateEquipmentForm, value: string | number | null) => {
+            if (!editingEquipment) return;
 
-        setEditingEquipment((prev) => {
-            if (!prev) return null;
-            return {
-                ...prev,
-                [field]: value,
-            };
-        });
-    };
+            setEditingEquipment((prev) => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    [field]: value,
+                };
+            });
+        },
+        [editingEquipment],
+    );
 
     const handleSaveEdit = async () => {
         if (!editingEquipment) return;
@@ -284,20 +352,23 @@ export default function EquipmentManagement() {
         }
     };
 
-    const handleNewEquipmentChange = (
-        index: number,
-        field: keyof NewEquipment,
-        value: string | number | File | null,
-    ) => {
-        setNewEquipment((prev) => {
-            const updated = [...prev];
-            updated[index] = {
-                ...updated[index],
-                [field]: value,
-            };
-            return updated;
-        });
-    };
+    const handleNewEquipmentChange = useCallback(
+        (
+            index: number,
+            field: keyof NewEquipment,
+            value: string | number | File | null,
+        ) => {
+            setNewEquipment((prev) => {
+                const updated = [...prev];
+                updated[index] = {
+                    ...updated[index],
+                    [field]: value,
+                };
+                return updated;
+            });
+        },
+        [],
+    );
 
     const handleAddNewEquipmentField = () => {
         setNewEquipment((prev) => [
@@ -580,54 +651,70 @@ export default function EquipmentManagement() {
         }
     };
 
-    // Helper functions
-    const getCategoryName = (categoryId: string | null) => {
-        if (!categoryId) return "-";
-        const category = categories.find((c) => c.id === categoryId);
-        return category ? category.name : categoryId;
-    };
+    // Memoize filtered equipments
+    const filteredEquipments = useMemo(() => {
+        return equipments.filter((item) => {
+            const matchesSearch =
+                item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                (item.customId &&
+                    item.customId
+                        .toLowerCase()
+                        .includes(searchTerm.toLowerCase()));
 
-    const getRoomNumber = (roomId: string | null) => {
-        if (!roomId) return "-";
-        const room = rooms.find((r) => r.id === roomId);
-        return room ? `ห้อง ${room.roomNumber}` : roomId;
-    };
+            const matchesCategory =
+                filterCategory === "" ||
+                filterCategory === "all" ||
+                item.categoryId === filterCategory;
 
-    // Add filtered equipment logic
-    const filteredEquipments = equipments.filter((item) => {
-        // Filter by search term
-        const matchesSearch =
-            item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (item.customId &&
-                item.customId.toLowerCase().includes(searchTerm.toLowerCase()));
+            const matchesStatus =
+                filterStatus === "" ||
+                filterStatus === "all" ||
+                item.status.toString() === filterStatus;
 
-        // Filter by category
-        const matchesCategory =
-            filterCategory === "" ||
-            filterCategory === "all" ||
-            item.categoryId === filterCategory;
+            const matchesRoom =
+                filterRoom === "" ||
+                filterRoom === "all" ||
+                item.roomId === filterRoom;
 
-        // Filter by status
-        const matchesStatus =
-            filterStatus === "" ||
-            filterStatus === "all" ||
-            item.status.toString() === filterStatus;
+            return (
+                matchesSearch && matchesCategory && matchesStatus && matchesRoom
+            );
+        });
+    }, [equipments, searchTerm, filterCategory, filterStatus, filterRoom]);
 
-        // Filter by room
-        const matchesRoom =
-            filterRoom === "" ||
-            filterRoom === "all" ||
-            item.roomId === filterRoom;
+    // Memoize total pages
+    const totalPages = useMemo(() => {
+        return Math.ceil(filteredEquipments.length / itemsPerPage);
+    }, [filteredEquipments.length, itemsPerPage]);
 
-        return matchesSearch && matchesCategory && matchesStatus && matchesRoom;
-    });
+    // Memoize paginated equipments with proper pagination calculation
+    const { startIndex, endIndex, paginatedEquipments } = useMemo(() => {
+        const start = (currentPage - 1) * itemsPerPage;
+        const end = start + itemsPerPage;
+        return {
+            startIndex: start,
+            endIndex: end,
+            paginatedEquipments: filteredEquipments.slice(start, end),
+        };
+    }, [filteredEquipments, currentPage, itemsPerPage]);
 
-    // Pagination calculations
-    const totalPages = Math.ceil(filteredEquipments.length / itemsPerPage);
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const paginatedEquipments = filteredEquipments.slice(
-        startIndex,
-        startIndex + itemsPerPage,
+    // Memoize helper functions
+    const getCategoryName = useCallback(
+        (categoryId: string | null) => {
+            if (!categoryId) return "-";
+            const category = categories.find((c) => c.id === categoryId);
+            return category ? category.name : categoryId;
+        },
+        [categories],
+    );
+
+    const getRoomNumber = useCallback(
+        (roomId: string | null) => {
+            if (!roomId) return "-";
+            const room = rooms.find((r) => r.id === roomId);
+            return room ? `ห้อง ${room.roomNumber}` : roomId;
+        },
+        [rooms],
     );
 
     // Reset to first page when filters change
@@ -635,100 +722,125 @@ export default function EquipmentManagement() {
         setCurrentPage(1);
     }, [searchTerm, filterCategory, filterStatus, filterRoom]);
 
-    // เพิ่มฟังก์ชันสำหรับสร้าง PDF
-    const handlePrintPDF = async () => {
-        const doc = new jsPDF({
-            orientation: "landscape",
-        });
+    // Add debounced search
+    const debouncedSetSearchTerm = useCallback(
+        (value: string) => {
+            debounce(() => setSearchTerm(value), 300)();
+        },
+        [setSearchTerm],
+    );
 
-        try {
-            const fontResponse = await fetch("/THSarabunNew.ttf");
-            const fontBuffer = await fontResponse.arrayBuffer();
-            const base64Font = Buffer.from(fontBuffer).toString("base64");
-            doc.addFileToVFS("THSarabunNew.ttf", base64Font);
-            doc.addFont("THSarabunNew.ttf", "THSarabunNew", "normal");
-            doc.addFont("THSarabunNew-Bold.ttf", "THSarabunNew", "bold");
-            doc.setFont("THSarabunNew");
-
-            // หัวข้อเอกสาร
-            doc.setFontSize(18);
-            doc.text("รายงานครุภัณฑ์", 14, 22);
-
-            // สร้างตารางหลังจากโหลดฟอนต์เสร็จแล้ว
-            autoTable(doc, {
-                startY: 30,
-                head: [
-                    [
-                        "รหัสครุภัณฑ์",
-                        "ชื่อครุภัณฑ์",
-                        "สถานะ",
-                        "ราคา",
-                        "วันที่ได้มา",
-                        "หมวดหมู่",
-                        "ห้อง",
-                        "ผู้เพิ่ม",
-                    ],
-                ],
-                body: paginatedEquipments.map((item) => [
-                    item.customId || "-",
-                    item.name,
-                    getRoleLabel(item.status),
-                    `${Number(item.price).toLocaleString()} บาท`,
-                    new Date(String(item.acquiredDate)).toLocaleDateString(
-                        "th-TH",
-                    ),
-                    getCategoryName(item.categoryId),
-                    getRoomNumber(item.roomId),
-                    item.creator?.firstName || "ไม่ทราบ",
-                ]),
-                styles: {
-                    font: "THSarabunNew",
-                    fontSize: 12,
-                },
-                headStyles: {
-                    fillColor: [71, 85, 105],
-                    font: "THSarabunNew", // เพิ่มการระบุฟอนต์สำหรับส่วนหัว
-                },
-                columnStyles: {
-                    0: { cellWidth: 30 }, // รหัสครุภัณฑ์
-                    1: { cellWidth: "auto" }, // ชื่อครุภัณฑ์
-                    2: { cellWidth: 20 }, // สถานะ
-                    3: { cellWidth: 30 }, // ราคา
-                    4: { cellWidth: 30 }, // วันที่ได้มา
-                    5: { cellWidth: 30 }, // หมวดหมู่
-                    6: { cellWidth: 30 }, // ห้อง
-                    7: { cellWidth: 30 }, // ผู้เพิ่ม
-                },
-            });
-
-            // เพิ่มวันที่พิมพ์
-            const today = new Date();
-            const dateStr = `วันที่พิมพ์: ${today.toLocaleDateString("th-TH")}`;
-            doc.setFontSize(10);
-            doc.text(dateStr, 14, doc.internal.pageSize.height - 10);
-
-            // บันทึกไฟล์
-            doc.save(`รายงานครุภัณฑ์_${format(new Date(), "dd-MM-yyyy")}.pdf`);
-        } catch (error) {
-            console.error("Error loading font:", error);
-            toast.error("เกิดข้อผิดพลาดในการโหลดฟอนต์");
+    // Replace image observer with LazyLoadedImage component
+    const imageSection = useMemo(() => {
+        if (!selectedEquipment?.images?.length) {
+            return <span className="text-gray-500">ไม่มีรูปภาพ</span>;
         }
-    };
+        return <EquipmentImages images={selectedEquipment.images} />;
+    }, [selectedEquipment?.images]);
 
-    // เพิ่มฟังก์ชันสำหรับดึงข้อมูลก่อนหน้า
-    const handleCopyPreviousData = (index: number) => {
-        if (index === 0 || !newEquipment[index - 1]) return;
-
-        setNewEquipment((prev) => {
-            const updated = [...prev];
-            // คัดลอกข้อมูลจากรายการก่อนหน้า ยกเว้น image
-            updated[index] = {
-                ...prev[index - 1],
-                image: prev[index].image, // คงค่ารูปภาพเดิมไว้
-            };
-            return updated;
+    // Optimize PDF generation
+    const generatePDF = useCallback(async () => {
+        const worker = new Worker(
+            new URL("../workers/pdfWorker.ts", import.meta.url),
+        );
+        worker.postMessage({
+            equipments: paginatedEquipments,
+            categories,
+            rooms,
         });
-    };
+
+        worker.onmessage = (e) => {
+            const { pdfBlob } = e.data;
+            const url = URL.createObjectURL(pdfBlob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `รายงานครุภัณฑ์_${format(new Date(), "dd-MM-yyyy")}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+    }, [paginatedEquipments, categories, rooms]);
+
+    // Add optimized search input
+    const SearchInput = useMemo(() => {
+        return (
+            <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 transform text-gray-400" />
+                <Input
+                    placeholder="ค้นหาครุภัณฑ์..."
+                    onChange={(e) => debouncedSetSearchTerm(e.target.value)}
+                    className="pl-8"
+                />
+            </div>
+        );
+    }, [debouncedSetSearchTerm]);
+
+    // Add optimized filters
+    const Filters = useMemo(() => {
+        return (
+            <div className="flex flex-col space-y-2 sm:flex-row sm:space-x-4 sm:space-y-0">
+                <Select
+                    value={filterCategory}
+                    onValueChange={setFilterCategory}
+                >
+                    <SelectTrigger>
+                        <SelectValue placeholder="ประเภทครุภัณฑ์" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">ทั้งหมด</SelectItem>
+                        {categories.map((category) => (
+                            <SelectItem key={category.id} value={category.id}>
+                                {category.name}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <Select value={filterRoom} onValueChange={setFilterRoom}>
+                    <SelectTrigger>
+                        <SelectValue placeholder="ห้อง" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">ทั้งหมด</SelectItem>
+                        {rooms.map((room) => (
+                            <SelectItem key={room.id} value={room.id}>
+                                ห้อง {room.roomNumber}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <Select value={filterStatus} onValueChange={setFilterStatus}>
+                    <SelectTrigger className="w-full sm:w-[180px]">
+                        <SelectValue placeholder="สถานะ" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">ทั้งหมด</SelectItem>
+                        <SelectItem value="0">ปกติ</SelectItem>
+                        <SelectItem value="1">ชำรุด</SelectItem>
+                        <SelectItem value="2">จำหน่าย</SelectItem>
+                    </SelectContent>
+                </Select>
+            </div>
+        );
+    }, [filterCategory, categories, filterRoom, rooms, filterStatus]);
+
+    // Add back the handleCopyPreviousData function
+    const handleCopyPreviousData = useCallback(
+        (index: number) => {
+            if (index === 0 || !newEquipment[index - 1]) return;
+
+            setNewEquipment((prev) => {
+                const updated = [...prev];
+                updated[index] = {
+                    ...prev[index - 1],
+                    image: prev[index].image, // Keep original image
+                    receipt: prev[index].receipt, // Keep original receipt
+                };
+                return updated;
+            });
+        },
+        [newEquipment],
+    );
 
     return (
         <div className="space-y-6">
@@ -741,7 +853,7 @@ export default function EquipmentManagement() {
                         <div className="flex space-x-2">
                             <Button
                                 variant="outline"
-                                onClick={handlePrintPDF}
+                                onClick={generatePDF}
                                 className="bg-green-500 text-white hover:bg-green-600"
                             >
                                 <Download className="mr-2 h-4 w-4" />{" "}
@@ -758,74 +870,19 @@ export default function EquipmentManagement() {
                 </CardHeader>
                 <CardContent>
                     <div className="mb-6 flex flex-col space-y-4">
-                        <div className="relative">
-                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 transform text-gray-400" />
-                            <Input
-                                placeholder="ค้นหาครุภัณฑ์..."
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                                className="pl-8"
-                            />
-                        </div>
-                        <div className="flex flex-col space-y-2 sm:flex-row sm:space-x-4 sm:space-y-0">
-                            <Select
-                                value={filterCategory}
-                                onValueChange={setFilterCategory}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="ประเภทครุภัณฑ์" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">ทั้งหมด</SelectItem>
-                                    {categories.map((category) => (
-                                        <SelectItem
-                                            key={category.id}
-                                            value={category.id}
-                                        >
-                                            {category.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <Select
-                                value={filterRoom}
-                                onValueChange={setFilterRoom}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="ห้อง" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">ทั้งหมด</SelectItem>
-                                    {rooms.map((room) => (
-                                        <SelectItem
-                                            key={room.id}
-                                            value={room.id}
-                                        >
-                                            ห้อง {room.roomNumber}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <Select
-                                value={filterStatus}
-                                onValueChange={setFilterStatus}
-                            >
-                                <SelectTrigger className="w-full sm:w-[180px]">
-                                    <SelectValue placeholder="สถานะ" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">ทั้งหมด</SelectItem>
-                                    <SelectItem value="0">ปกติ</SelectItem>
-                                    <SelectItem value="1">ชำรุด</SelectItem>
-                                    <SelectItem value="2">จำหน่าย</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        {SearchInput}
+                        {Filters}
                     </div>
 
                     <div className="-mx-4 overflow-x-auto sm:mx-0">
                         <div className="inline-block min-w-full align-middle">
-                            <div className="overflow-hidden rounded-lg border border-gray-200">
+                            <div
+                                className="overflow-hidden rounded-lg border border-gray-200"
+                                style={{
+                                    height: "600px",
+                                    position: "relative",
+                                }}
+                            >
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
@@ -834,8 +891,8 @@ export default function EquipmentManagement() {
                                             <TableHead>สถานะ</TableHead>
                                             <TableHead>ราคา</TableHead>
                                             <TableHead>วันที่ได้มา</TableHead>
-                                            <TableHead>ห้อง</TableHead>
                                             <TableHead>หมวดหมู่</TableHead>
+                                            <TableHead>ห้อง</TableHead>
                                             <TableHead>ผู้เพิ่ม</TableHead>
                                             <TableHead>การจัดการ</TableHead>
                                         </TableRow>
@@ -844,7 +901,7 @@ export default function EquipmentManagement() {
                                         {paginatedEquipments.length === 0 ? (
                                             <TableRow>
                                                 <TableCell
-                                                    colSpan={8}
+                                                    colSpan={9}
                                                     className="py-4 text-center"
                                                 >
                                                     <p className="text-gray-500">
@@ -853,96 +910,98 @@ export default function EquipmentManagement() {
                                                 </TableCell>
                                             </TableRow>
                                         ) : (
-                                            paginatedEquipments.map((item) => (
-                                                <TableRow key={item.id}>
-                                                    <TableCell>
-                                                        {item.customId ||
-                                                            "NULL"}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <button
-                                                            onClick={() =>
-                                                                handleShowDetails(
-                                                                    item,
-                                                                )
-                                                            }
-                                                            className="text-left hover:text-blue-600 hover:underline"
-                                                        >
-                                                            {item.name}
-                                                        </button>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {getRoleLabel(
-                                                            item.status,
-                                                        )}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {Number(
-                                                            item.price,
-                                                        ).toLocaleString()}{" "}
-                                                        บาท
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {new Date(
-                                                            String(
-                                                                item.acquiredDate,
-                                                            ),
-                                                        ).toLocaleDateString(
-                                                            "th-TH",
-                                                        )}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {getRoomNumber(
-                                                            item.roomId,
-                                                        )}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {getCategoryName(
-                                                            item.categoryId,
-                                                        )}
-                                                    </TableCell>
-                                                    <TableCell
-                                                        key={`creator-${item.id}`}
+                                            paginatedEquipments.map(
+                                                (equipment) => (
+                                                    <TableRow
+                                                        key={equipment.id}
                                                     >
-                                                        {item.creator
-                                                            ?.firstName ||
-                                                            "ไม่ทราบ"}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <div className="flex gap-2">
-                                                            <Button
-                                                                variant="outline"
-                                                                size="sm"
-                                                                className="flex items-center gap-1"
+                                                        <TableCell>
+                                                            {equipment.customId ||
+                                                                "NULL"}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <button
                                                                 onClick={() =>
-                                                                    handleEditEquipment(
-                                                                        item,
+                                                                    handleShowDetails(
+                                                                        equipment,
                                                                     )
                                                                 }
+                                                                className="text-left hover:text-blue-600 hover:underline"
                                                             >
-                                                                <Edit className="h-4 w-4" />{" "}
-                                                                แก้ไข
-                                                            </Button>
-                                                            <Button
-                                                                variant="destructive"
-                                                                size="sm"
-                                                                className="flex items-center gap-1"
-                                                                onClick={() => {
-                                                                    setEquipmentToDelete(
-                                                                        item.id,
-                                                                    );
-                                                                    setIsDeleteAlertOpen(
-                                                                        true,
-                                                                    );
-                                                                }}
-                                                            >
-                                                                <Trash2 className="h-4 w-4" />{" "}
-                                                                ลบ
-                                                            </Button>
-                                                        </div>
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))
+                                                                {equipment.name}
+                                                            </button>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {getRoleLabel(
+                                                                equipment.status,
+                                                            )}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {Number(
+                                                                equipment.price,
+                                                            ).toLocaleString()}{" "}
+                                                            บาท
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {new Date(
+                                                                String(
+                                                                    equipment.acquiredDate,
+                                                                ),
+                                                            ).toLocaleDateString(
+                                                                "th-TH",
+                                                            )}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {getCategoryName(
+                                                                equipment.categoryId,
+                                                            )}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {getRoomNumber(
+                                                                equipment.roomId,
+                                                            )}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {equipment.creator
+                                                                ?.firstName ||
+                                                                "ไม่ทราบ"}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <div className="flex gap-2">
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="flex items-center gap-1"
+                                                                    onClick={() =>
+                                                                        handleEditEquipment(
+                                                                            equipment,
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    <Edit className="h-4 w-4" />{" "}
+                                                                    แก้ไข
+                                                                </Button>
+                                                                <Button
+                                                                    variant="destructive"
+                                                                    size="sm"
+                                                                    className="flex items-center gap-1"
+                                                                    onClick={() => {
+                                                                        setEquipmentToDelete(
+                                                                            equipment.id,
+                                                                        );
+                                                                        setIsDeleteAlertOpen(
+                                                                            true,
+                                                                        );
+                                                                    }}
+                                                                >
+                                                                    <Trash2 className="h-4 w-4" />{" "}
+                                                                    ลบ
+                                                                </Button>
+                                                            </div>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ),
+                                            )
                                         )}
                                     </TableBody>
                                 </Table>
@@ -984,10 +1043,7 @@ export default function EquipmentManagement() {
                                     </span>{" "}
                                     ถึง{" "}
                                     <span className="font-medium">
-                                        {Math.min(
-                                            startIndex + itemsPerPage,
-                                            filteredEquipments.length,
-                                        )}
+                                        {endIndex}
                                     </span>{" "}
                                     จากทั้งหมด{" "}
                                     <span className="font-medium">
@@ -1610,37 +1666,7 @@ export default function EquipmentManagement() {
                             </div>
                             <div className="grid grid-cols-4 items-center gap-4">
                                 <span className="font-medium">รูปภาพ:</span>
-                                <div className="col-span-3">
-                                    {selectedEquipment.images &&
-                                    selectedEquipment.images.length > 0 ? (
-                                        <div className="flex flex-wrap gap-2">
-                                            {selectedEquipment.images.map(
-                                                (image) => (
-                                                    <a
-                                                        key={image.id}
-                                                        href={`http://localhost:8000/${image.filepath.replace(/\\/g, "/")}`}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="block"
-                                                    >
-                                                        <Image
-                                                            src={`http://localhost:8000/${image.filepath.replace(/\\/g, "/")}`}
-                                                            alt={image.filename}
-                                                            width={96}
-                                                            height={96}
-                                                            className="h-24 w-auto rounded border border-gray-200 object-cover"
-                                                            crossOrigin="use-credentials"
-                                                        />
-                                                    </a>
-                                                ),
-                                            )}
-                                        </div>
-                                    ) : (
-                                        <span className="text-gray-500">
-                                            ไม่มีรูปภาพ
-                                        </span>
-                                    )}
-                                </div>
+                                <div className="col-span-3">{imageSection}</div>
                             </div>
                             <div className="grid grid-cols-4 items-center gap-4">
                                 <span className="font-medium">
@@ -1654,17 +1680,21 @@ export default function EquipmentManagement() {
                                             rel="noopener noreferrer"
                                             className="block"
                                         >
-                                            <Image
-                                                src={`http://localhost:8000/${selectedEquipment.receiptImage.filepath.replace(/\\/g, "/")}`}
-                                                alt={
-                                                    selectedEquipment
-                                                        .receiptImage.filename
-                                                }
-                                                width={96}
-                                                height={96}
-                                                className="h-24 w-auto rounded border border-gray-200 object-cover"
-                                                crossOrigin="use-credentials"
-                                            />
+                                            <div className="relative h-24 w-24 overflow-hidden rounded border border-gray-200">
+                                                <Image
+                                                    src={`http://localhost:8000/${selectedEquipment.receiptImage.filepath.replace(/\\/g, "/")}`}
+                                                    alt={
+                                                        selectedEquipment
+                                                            .receiptImage
+                                                            .filename
+                                                    }
+                                                    fill
+                                                    sizes="(max-width: 96px) 100vw, 96px"
+                                                    className="object-cover"
+                                                    loading="lazy"
+                                                    unoptimized
+                                                />
+                                            </div>
                                         </a>
                                     ) : (
                                         <span className="text-gray-500">
@@ -1744,7 +1774,10 @@ export default function EquipmentManagement() {
                                 <Select
                                     value={String(editingEquipment.status)}
                                     onValueChange={(value) =>
-                                        handleEditChange("status", Number(value))
+                                        handleEditChange(
+                                            "status",
+                                            Number(value),
+                                        )
                                     }
                                 >
                                     <SelectTrigger>

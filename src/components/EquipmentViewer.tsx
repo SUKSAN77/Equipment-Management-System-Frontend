@@ -1,8 +1,8 @@
 "use client";
 
-import "@fontsource/sarabun/thai.css";
-import "@fontsource/sarabun/400.css";
-import "@fontsource/sarabun/700.css";
+// import "@fontsource/sarabun/thai.css";
+// import "@fontsource/sarabun/400.css";
+// import "@fontsource/sarabun/700.css";
 
 import { format } from "date-fns";
 import jsPDF from "jspdf";
